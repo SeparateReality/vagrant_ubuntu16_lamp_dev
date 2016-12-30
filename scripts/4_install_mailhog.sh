@@ -1,11 +1,8 @@
 #!/bin/bash
 
 echo "... install mailhog and mhsendmail ..."
-#
 echo "    USAGE: ssh into your machine. just call 'mailhog'"
-#
 echo "    Read Emails: Open in browser 'http://[your-host-name]:8025'"
-#
 
 echo "... Downloading mailhog & mhsendmail, installing in path ..."
 # get redirect to URL with latest releases

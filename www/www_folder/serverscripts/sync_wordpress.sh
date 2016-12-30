@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# v1.0
+# v1.1
 # changelog:
+# - added option local_mail, no_files, no_db
+# - 'local_mail' will change wp option from postman-smtp plugin to use local smtp (e.g. with MailHog)
 # - Remotesync resolves Symlinks
 
 # define needed input vars
 must_input_vars=( "source_domain" "source_path" "source_db_host" "source_db" "source_db_user"
-									"source_db_password" "source_kurs_email" "target_db_host" "target_domain" "target_path"
+									"source_db_password" "target_db_host" "target_domain" "target_path"
 									"target_db" "target_db_user" "target_db_password" "ERR_LOG")
 
-place="${1%.*}"
+config_file="${1%.*}"
 break="$2"
 
 function contains() {
@@ -26,8 +28,8 @@ function contains() {
 
 function usage() {
 	echo "---"
-	echo "Usage:        $0 [conf_file]"
-	echo "              where [conf_file] has to be the name of the config file e.g. 'vagrant' for vagrant.cfg"
+	echo "Usage:        $0 [config_file]"
+	echo "              where [config_file] has to be the name of the config file e.g. 'vagrant' for vagrant.cfg"
 	echo "Example:      $0 vagrant"
 	echo "Alternative:  $0 vagrant break"
 	echo "              This will stop the execution after reading and showing the config"
@@ -64,8 +66,11 @@ function spinner() {
     printf "    \b\b\b\b"
 }
 
-# check if places var has been set
-if [ -n "$place" ]; then
+# delete old log file
+rm -f ${ERR_LOG}
+
+# check if config_file attribute has been set
+if [ -n "$config_file" ]; then
   echo "Config file set"
 else
 	echo "ERROR: No config file attribute set!" 1>&2
@@ -74,13 +79,13 @@ fi
 
 VARS="`set -o posix ; set`"
 echo "Reading config file...."
-if [ -f ${place}.cfg ]; then
-	source ${place}.cfg
+if [ -f ${config_file}.cfg ]; then
+	source ${config_file}.cfg
 else
-	if [ -f ${place} ]; then
-		source ${place}
+	if [ -f ${config_file} ]; then
+		source ${config_file}
 	else
-    echo "ERROR: Config file not found. There needs to be an attribute to a file called [config].cfg" 1>&2
+    echo "ERROR: Config file not found. There needs to be an attribute to a file called [config_file].cfg" 1>&2
     usage
 	fi
 fi
@@ -122,57 +127,67 @@ if [ "${2}" == "break" ]; then
 	exit 0;
 fi
 
-# delete old log file
-rm -f ${ERR_LOG}
 
-# DATABASE OPERATION
-# - read db from source
-# - write in target db
-# - adapt db to local settings
-#
-h1 "Database operation"
-
-echo_now
-echo "--  get dump from source db: ($source_db) --"
-rm -f ${source_db}.sql
-
-if [ -n "$sshhost" ]; then
-	echo "Info: 'sshhost' is set to '${sshhost}'. Dumping Db from there"
-	ssh -C $sshhost "mysqldump --user='${source_db_user}' --password='${source_db_password}' --host=${source_db_host} --add-drop-table ${source_db} --log-error=${ERR_LOG}" > ${source_db}.sql 2>>${ERR_LOG} & spinner "DATABASE DUMP"
+if [ -n "$no_db" ]; then
+	echo "'no_db' is set. Omitting database operation"
 else
-	echo "Info: 'sshhost' is not set. Dumping Db from local mySQL installation"
-	mysqldump --user=${source_db_user} --password="${source_db_password}" --host=${source_db_host} --add-drop-table ${source_db} --log-error=${ERR_LOG} > ${source_db}.sql & spinner "DATABASE DUMP"
+	# DATABASE OPERATION
+	# - read db from source
+	# - write in target db
+	# - adapt db to local settings
+	#
+	h1 "Database operation"
+
+	echo_now
+	output=$(mysql --user=${target_db_user} --password="${target_db_password}" -s -N -e "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '${target_db}'" information_schema)
+	if [[ -z "${output}" ]]; then
+		# does not exist, try to generate with user/pass=root
+		echo "INFO: target db and/or user DO NOT exit. Try to create: ${target_db_user} @ $target_db"
+		if ! mysql --user=root --password=root --host=${target_db_host} -e "CREATE DATABASE IF NOT EXISTS ${target_db};"; then
+			# no way to generate target db. something terribly wrong. stop right here.
+			echo "SERIOUS ERROR. STOP SCRIPT:"
+			echo "  Target database or user does not exist and could not be created since standard setting (db user/pass = root) does not work. Please create manually before next execution!"
+			exit 1;
+		fi
+		mysql --user=root --password=root --host=${target_db_host} ${target_db} -e "CREATE USER ${target_db_user}@${target_db_host} IDENTIFIED BY '${target_db_password}';" # /dev/null  # will throw error in case user exists
+		mysql --user=root --password=root --host=${target_db_host} ${target_db} -e "GRANT ALL PRIVILEGES ON $target_db.* TO ${target_db_user}@${target_db_host} WITH GRANT OPTION;"  # 2>>${ERR_LOG}
+		echo "  Database/User created successfully ($target_db_user @ $target_db)"
+	fi
+
+	echo_now
+	echo "--  get dump from source db: ($source_db) --"
+	rm -f ${source_db}.sql    # just in case its somehow left over
+
+	if [ -n "$sshhost" ]; then
+		echo "Info: 'sshhost' is set to '${sshhost}'. Dumping Db from there"
+		ssh -C $sshhost "mysqldump --user='${source_db_user}' --password='${source_db_password}' --host=${source_db_host} --add-drop-table ${source_db} --log-error=${ERR_LOG}" > ${source_db}.sql 2>>${ERR_LOG} & spinner "DATABASE DUMP"
+	else
+		echo "Info: 'sshhost' is not set. Dumping Db from local mySQL installation"
+		mysqldump --user=${source_db_user} --password="${source_db_password}" --host=${source_db_host} --add-drop-table ${source_db} --log-error=${ERR_LOG} > ${source_db}.sql & spinner "DATABASE DUMP"
+	fi
+
+	echo_now
+		echo "-- Import db dump in target db: ($target_db) --"
+		mysql --user=${target_db_user} --password="${target_db_password}" --host=${target_db_host} --default-character-set=utf8 ${target_db} < ${source_db}.sql  2>>${ERR_LOG} & spinner "DATABASE IMPORT"
+	rm -f ${source_db}.sql
+
+	echo_now
+	  echo "--  Update wp_options - new domain: ${target_domain}"
+	  mysql --user=${target_db_user} --password=${target_db_password} --host=${target_db_host} ${target_db} -e "UPDATE wp_options SET option_value = REPLACE(option_value, '${source_domain}', '${target_domain}') WHERE option_value LIKE '%${source_domain}%'"  2>>${ERR_LOG}
+	  echo "--  Update wp_options - set blog to private (tell search engines not to show this page)"
+	  mysql --user=${target_db_user} --password=${target_db_password} --host=${target_db_host} ${target_db} -e "update wp_options set option_value=0 where option_name='blog_public';" 2>>${ERR_LOG}
 fi
 
-echo_now
-	echo "-- Import db dump in target db: ($target_db) --"
-	mysql --user=${target_db_user} --password="${target_db_password}" --host=${target_db_host} --default-character-set=utf8 ${target_db} < ${source_db}.sql  2>>${ERR_LOG} & spinner "DATABASE IMPORT"
-rm -f ${source_db}.sql
 
-echo_now
-  echo "--  Update wp_options - new domain: ${target_domain}"
-  mysql --user=${target_db_user} --password=${target_db_password} --host=${target_db_host} ${target_db} -e "UPDATE wp_options SET option_value = REPLACE(option_value, '${source_domain}', '${target_domain}') WHERE option_value LIKE '%${source_domain}%'"  2>>${ERR_LOG}
-  echo "--  Update wp_options - set blog to private (tell search engines not to show this page)"
-  mysql --user=${target_db_user} --password=${target_db_password} --host=${target_db_host} ${target_db} -e "update wp_options set option_value=0 where option_name='blog_public';" 2>>${ERR_LOG}
+if [ -n "$no_files" ]; then
+	echo "'no_files' is set. Omitting file sync (but not file operation!)"
+else
+	# FILE SYNC
+	# - sync source files to target system
+	#
+	h1 "File syncronisation"
 
-# we dont need the following anymore since we use MailHog to catch all email traffic
-#
-#  echo "--  Update several tables to change all email domains to 'test.YOURDOMAIN.de'. We don't want to send emails to customers from the test system"
-#  mysql --user=${target_db_user} --password=${target_db_password} --host=${target_db_host} ${target_db} -e "update wp_postmeta set meta_value = CONCAT(LEFT(meta_value, INSTR(meta_value, '@')), 'test.YOURDOMAIN.de') where meta_key = '_billing_email' and meta_value like '%@%';
-#			update wp_postmeta set meta_value = CONCAT(LEFT(meta_value, INSTR(meta_value, '@')), 'test.YOURDOMAIN.de', RIGHT(meta_value,3) ) where meta_key = '_invoice_recipient' and meta_value like '%@%';
-#			update wp_followup_subscribers set email = CONCAT(LEFT(email, INSTR(email, '@')), 'test.YOURDOMAIN.de') where email like '%@%';
-#			UPDATE wp_followup_email_logs SET email_address = CONCAT(LEFT(email_address, INSTR(email_address, '@')), 'test.YOURDOMAIN.de') where email_address like '%@%';
-#			update wp_followup_customers set email_address = CONCAT(LEFT(email_address, INSTR(email_address, '@')), 'test.YOURDOMAIN.de') where email_address like '%@%';
-#			update wp_followup_email_orders set user_email = CONCAT(LEFT(user_email, INSTR(user_email, '@')), 'test.YOURDOMAIN.de') where user_email like '%@%';
-#			update wp_followup_email_tracking set user_email = CONCAT(LEFT(user_email, INSTR(user_email, '@')), 'test.YOURDOMAIN.de') where user_email like '%@%';
-#			" 2>>${ERR_LOG}
-
-# FILE SYNC
-# - sync source files to target system
-#
-h1 "File syncronisation"
-
-echo_now
+	echo_now
 	echo "--  Starting file sync from ${source_path} TO ${target_path}"
 	# use -n for dry run
 
@@ -185,9 +200,9 @@ echo_now
 		rsync -rlptv --delete --exclude 'cache/*' ${source_path}/wordpress ${target_path}/ 2>>${ERR_LOG}
 		rsync -rlptv --delete ${source_path}/wp-config.php ${target_path}/ 2>>${ERR_LOG}
 	fi
-	echo
+	echo ""
 
-echo_now
+	echo_now
 	echo "-- starting file sync of all git repo plugins"
 	if [ -n "$plugin_gitrepo_path" ]; then
 		echo "Info: 'plugin_gitrepo_path' is set to '${plugin_gitrepo_path}'. Syncing git repo from there."
@@ -223,6 +238,7 @@ echo_now
 		echo "Info: 'plugin_gitrepo_path' is NOT set. No additional sync with git repo."
 		echo
 	fi
+fi
 
 # FILE OPERATION
 # - adapt target config to local settings
@@ -238,6 +254,7 @@ echo_now
 
 	echo "--  Change wp-config.php: DEBUG settings"
 	echo "    set WP_DEBUG=true, WP_DEBUG_DISPLAY=false, WP_DEBUG_LOG=true"
+	# see http://sed.sourceforge.net/sed1line_de.html
 	sed -i "/WP_DEBUG/s/false/true/1" ${target_path}/wp-config.php
 
 	if grep -q "WP_DEBUG_DISPLAY" ${target_path}/wp-config.php
@@ -275,7 +292,7 @@ echo_now
 #  type wpi >/dev/null 2>&1 || { echo >&2 "wp-cli not installed. command 'wp' not working." >> ${ERR_LOG}; exit 1 }
 
   echo "--  switch off some plugins (jetpack, google-analytics, wp-rocket)"
-  echo "    e.g. to avoid using the distributed network of wp (which would not work on dev...)"
+  echo "    e.g. to avoid using the distributed network of wp (which would not work on testing...)"
 	if [ -n "$wp" ]; then
 		echo "\$wp set in config file. using wp='$wp'"
 		wp+=" --allow-root --path=${target_path}/wordpress"
@@ -289,7 +306,26 @@ echo_now
   $wp plugin deactivate google-analytics-for-wordpress 2>>${ERR_LOG}
   $wp plugin deactivate wp-rocket 2>>${ERR_LOG}
 
+	if [ -n "$local_mail" ]; then
+		$wp plugin is-installed postman-smtp
+		if [ $? == 0 ]; then
+			if hash jq 2>/dev/null; then
+		    echo "Wordpress postman-smtp plugin installed. changing smtp settings."
+		    a1=$($wp option get --format=json postman_options)
+		    a2=$(echo $a1 | jq '.enc_type="none" | .hostname="localhost" | .port=1025 | .auth_type="none" | .sender_email="kurse@my-testdomain.local" | .envelope_sender="kurse@test.local"')
+				$wp option update --format=json postman_options "$a2"
+			else
+				echo "WARNING: The wordpress postman-smtp plugin is installed but 'jq' is not! It is needed to manipulate json in bash - e.g. change wordpress options...)"
+				echo "   Ether install jq with 'apt-get -y install jq'"
+				echo "   or change smtp values yourself: 'Settings/Postman SMTP'"
+				echo "      outgoing mail server: localhost, port: 1025, auth_type: none, enc_type: none"
+			fi
+	  else
+	    echo "Wordpress plugin postman-smtp not installed."
+		fi
+	fi
+
 h1 "DONE"
 echo_now
 	echo "Wordpress copy is now ready to be used."
-	echo "  see ${ERR_LOG} if something is not working as expected!"
+	echo "  see ${ERR_LOG} if something is not working as expected! Good luck :-)"
