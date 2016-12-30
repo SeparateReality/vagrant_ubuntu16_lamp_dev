@@ -312,7 +312,7 @@ echo_now
 			if hash jq 2>/dev/null; then
 		    echo "Wordpress postman-smtp plugin installed. changing smtp settings."
 		    a1=$($wp option get --format=json postman_options)
-		    a2=$(echo $a1 | jq '.enc_type="none" | .hostname="localhost" | .port=1025 | .auth_type="none" | .sender_email="kurse@my-testdomain.local" | .envelope_sender="kurse@test.local"')
+		    a2=$(echo $a1 | jq '.enc_type="none" | .hostname="localhost" | .port=1025 | .auth_type="none" | .sender_email="dev@my-testserver.com" | .envelope_sender="dev@my-testserver.com"')
 				$wp option update --format=json postman_options "$a2"
 			else
 				echo "WARNING: The wordpress postman-smtp plugin is installed but 'jq' is not! It is needed to manipulate json in bash - e.g. change wordpress options...)"
