@@ -23,7 +23,7 @@ sudo mv MailHog_linux_amd64 /usr/local/bin/mailhog
 sudo mv mhsendmail_linux_amd64 /usr/local/bin/mhsendmail
 
 echo "... Re-configuring PHP7-FPM ..."
-sudo sed -i "s/sendmail_path.*/sendmail_path  = \/usr\/local\/bin\/mhsendmail/" /etc/php/7.0/fpm/php.ini
+sudo sed -i "s/;* *sendmail_path.*=/sendmail_path  = \/usr\/local\/bin\/mhsendmail/" /etc/php/7.0/fpm/php.ini
 
 echo "... Restarting php7.0-fpm Service ..."
 sudo service php7.0-fpm restart
