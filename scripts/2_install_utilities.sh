@@ -15,7 +15,7 @@ sudo apt-get -qq install unzip > /dev/null
 sudo apt-get -qq install iptables > /dev/null
 sudo apt-get -qq install debconf-utils > /dev/null
 sudo apt-get -qq install software-properties-common > /dev/null
-sudo apt-get -qq install jq /dev/null  # json handling with bash
+sudo apt-get -qq install jq > /dev/null  # json handling with bash
 sudo apt-get -y update > /dev/null
 
 # my profile settings (for vagrant and root user)
